@@ -1,5 +1,5 @@
 -r ../requirements-base.txt
 
 docker==3.3.0
-GitPython==2.1.7
+GitPython==2.1.10
 Jinja2==2.9.6
