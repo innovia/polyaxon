@@ -1,3 +1,5 @@
+import base64
+import boto3
 import jinja2
 import json
 import logging
@@ -70,6 +72,42 @@ class DockerBuilder(object):
     def clean(self):
         # Clean dockerfile
         delete_path(self.dockerfile_path)
+
+    def login_internal_docker_registry(self, registry_user, registry_password, registry_host):
+        _logger.info("Logging to Docker internal registry")
+        self.login(
+            registry_user=registry_user,
+            registry_password=registry_password,
+            registry_host=registry_host
+        )
+
+    def login_to_ecr(self):
+        if not settings.ECR_REGION and not settings.ECR_ACCOUNT_ID:
+            return
+
+        _logger.info("Logging to AWS ECR registry on %s", settings.REGISTRY_ECR["region"])
+        ecr_client = boto3.client('ecr', region_name=settings.REGISTRY_ECR["region"])
+        token = ecr_client.get_authorization_token(registryIds=settings.REGISTRY_ECR["account_id"].split())
+        registry_user, registry_password = base64.b64decode(
+            token['authorizationData'][0]['authorizationToken']
+        ).decode().split(':')
+        registry_host = token['authorizationData'][0]['proxyEndpoint']
+        self.docker.login(username=registry_user,
+                          password=registry_password,
+                          registry=registry_host
+        )
+
+    def login_private_registries(self):
+        if not settings.PRIVATE_REGISTRIES:
+            return
+
+        for registry in settings.PRIVATE_REGISTRIES:
+            _logger.info("Logging to Docker private registry - %s", registry["host"])
+            self.login(
+                registry_user=registry['username'],
+                registry_password=registry['password'],
+                registry_host=registry['host']
+            )
 
     def login(self, registry_user, registry_password, registry_host):
         try:
@@ -261,9 +299,17 @@ def build(build_job):
         from_image=build_job.image,
         build_steps=build_job.build_steps,
         env_vars=build_job.env_vars)
-    docker_builder.login(registry_user=settings.REGISTRY_USER,
-                         registry_password=settings.REGISTRY_PASSWORD,
-                         registry_host=settings.REGISTRY_HOST)
+    docker_builder.login_internal_docker_registry(
+         registry_user=settings.REGISTRY_USER,
+         registry_password=settings.REGISTRY_PASSWORD,
+         registry_host=settings.REGISTRY_HOST
+    )
+    if settings.PRIVATE_REGISTRIES:
+        docker_builder.login_private_registries()
+
+    if settings.ECR_REGION and settings.ECR_ACCOUNT_ID:
+        docker_builder.login_to_ecr()
+        
     if docker_builder.check_image():
         # Image already built
         docker_builder.clean()
